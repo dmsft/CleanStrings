@@ -326,14 +326,18 @@ def SaveModel(file_prefix:str, model):
 
 
 # =================================================================================================
-def LoadModel(file:str):
+def LoadModel(file:str, input_size=0, hidden_size=0):
 	"""Load a PyTorch model from `file`."""
 
 	# filename is a combination of prefix, input dimensions, and hidden size
 
+	# when sizes supplied use them as is
+	if input_size and hidden_size:
+		file = f"{file}_{input_size}_{hidden_size}.model"
+
 	# if the file exists then it was requested via args
 	# extract parameters from the filename
-	if os.path.isfile(file):
+	elif os.path.isfile(file):
 		parts = file.split("_")
 		input_size = int(parts[1])
 		hidden_size = int(parts[2].split(".")[0])
@@ -706,7 +710,7 @@ def TrainNeuralNetwork(args):
 	train_epochs(model, train_loader, val_loader, loss_fn, optimizer, epochs, model_file)
 
 	# reload the model for testing
-	(model, _) = LoadModel(model_file)
+	(model, _) = LoadModel(model_file, max_len, hidden_size)
 
 	# run a validation test on the final model
 	test_predictions(model, val_loader, predict_threshold)
