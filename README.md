@@ -52,15 +52,17 @@ Given the output from **strings**, or any other text file, it will only output l
 
 ```bash
 py CleanStrings.py -d -y 0.95 memdump.txt
-
-f;k0t&H
-">>,;n
-f2r"78
-bbbbbbbbbbbcbcbcbcbcbcbcbcbcbcbcbcbbcbcbcbbbbbbccbccbccbccbccbbbbbbbbbbbbbbbbbbbbbbbbb
-MA][\OCK\GMOoO
+...
+Files/Go/src/runtime/histogram.go
+*bbolt.txPending
+runtime.traceLocker.GoEnd
+commitFreelist@4@
+runtime.mapKeyError
+golang.org/x/text/message/catalog.ErrNotFound
+*mapstruct
 ...
 
-Shown 58 out of 495 [11.72%].
+Shown 1,987 out of 2,006 [99.05%].
 ```
 
 
