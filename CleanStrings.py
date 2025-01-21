@@ -463,97 +463,111 @@ def TrainNaiveBayes(args):
 
 
 # =================================================================================================
-def ClassifyNaiveBayes(args):
-
-	# extract required cli arguments
-	file = args.file
-	min_len = args.min_len
-	max_len = args.max_len
-	model_file = args.model_file + ".pickle"
-	predict_threshold = args.threshold
-	verbose = args.debug
+def ClassifyNaiveBayes(model_prefix="", lines=[]) -> list:
 
 	# load the classifier
-	nb = NaiveBayesClassifier(model_file, verbose)
+	nb = NaiveBayesClassifier(model_prefix + ".pickle")
 
-	# load the data
-	lines = LinesFeeder(file, min_len, max_len, chunk_past_max=False, verbose=verbose)
-
-	tot = 0
-	cnt = 0
+	out = []
 	for line in lines:
-		tot += 1
-		(good_prob, noise_prob) = nb.Classify(line)
+		(good_prob, _) = nb.Classify(line)
+		out.append((line, good_prob))
 
-		# debug mode: output classification details
-		if verbose:
-			out = f"{line[:max_len]:<37}\t{good_prob:.3f} | {noise_prob:.3f}"
-			print(out)
-			continue
-
-		# filter out the noise
-		if good_prob < predict_threshold:
-			continue
-
-		cnt += 1
-		print(line)
-
-	if verbose:
-		cnt = tot
-
-	print(f"[b red]Shown {cnt:,} out of {tot:,} [{cnt/tot*100:.2f}%].", file=sys.stderr)
+	return out
 
 
 # =================================================================================================
-def ClassifyNeuralNetwork(args):
+def ClassifyNeuralNetwork(model_prefix="", lines=[]) -> list:
 	"""Read a text file and classify each line using the neural network model, printing good lines."""
 
-	# extract required cli arguments
-	threshold = args.threshold
-	min_len = args.min_len
-	max_len = args.max_len
-	model_file = args.model_file
-	text_file = args.file
-	workers = args.threads - 1
-	debug = args.debug
-
 	# load a saved model
-	(model, dimensions) = LoadModel(model_file)
+	(model, dimensions) = LoadModel(model_prefix)
 	model.eval()
-
-	# load file contents, do not chunk and keep long lines
-	lines = LinesFeeder(text_file, min_len, max_len, chunk_past_max=False, verbose=debug)
-	lines = list(lines)  # generator to list
 
 	# Prepare dataset and dataloader
 	ds = NNDatasetBC(lines, [], dimensions)  # there's no noise data
 	data_loader = torch.utils.data.DataLoader(
 		ds, batch_size=256,
-		shuffle=False, # retain order
-		num_workers=workers,
-		persistent_workers=False,
+		shuffle=False, # retain order (this is important)
+		num_workers=0,
 		pin_memory=True
 	)
 
 	results = []
-	hits = 0
 	with torch.no_grad():
-		for idx, (inputs, masks, _) in enumerate(data_loader):
+		for i, (inputs, masks, _) in enumerate(data_loader):
 			prob = model(inputs.to(dev), masks.to(dev))
 
 			# collect batches of results, in numpy format
 			arr = prob.squeeze().cpu().numpy()
 			results.extend(arr)
 
-	# iterate all results and print the good ones
-	for (idx, prob) in enumerate(results):
-		if prob >= threshold:
-			print(lines[idx])
-			hits += 1
+	# iterate all results
+	out = []
+	for (i, prob) in enumerate(results):
+		out.append((lines[i], prob))
 
-	# calc percentage shown vs total
-	tot = len(lines)
-	print(f"[b red]Shown {hits:,} out of {tot:,} [{hits/tot*100:.2f}%].", file=sys.stderr)
+	# print(f"[b red]Shown {hits:,} out of {tot:,} [{hits/tot*100:.2f}%].", file=sys.stderr)
+	return out
+
+
+# =================================================================================================
+def ClassifyMain(args):
+
+	# extract required cli arguments
+	algo = args.algo
+	file = args.file
+	min_len = args.min_len
+	max_len = args.max_len
+	verbose = args.debug
+	model_file = args.model_file
+	threshold = args.threshold
+
+	# load the data
+	lines = LinesFeeder(file, min_len, max_len, chunk_past_max=False, verbose=verbose)
+	lines = list(set(lines))  # generator to uniq list
+
+	if algo == "nb":
+		results = ClassifyNaiveBayes(model_file, lines)
+	elif algo == "nn":
+		results = ClassifyNeuralNetwork(model_file, lines)
+	elif algo == "both":
+		nb_results = ClassifyNaiveBayes(model_file, lines)
+		nn_results = ClassifyNeuralNetwork(model_file, lines)
+
+		assert len(nb_results) == len(nn_results)
+		assert nb_results[0][0] == nn_results[0][0]
+
+		results = []
+		for i, (line, nb_prob) in enumerate(nb_results):
+			(_, nn_prob) = nn_results[i]
+			avg_prob = (nb_prob + nn_prob) / 2
+			results.append((line, avg_prob))
+	else:
+		print(f"[e] Unknown algorithm: {args.algo}.", file=sys.stderr)
+		return
+
+	print_classification(results, threshold, verbose)
+
+
+# =================================================================================================
+def print_classification(results=[], threshold=0.85, verbose=False):
+	"""Print classification results."""
+
+	cnt = 0
+	for (line, prob) in results:
+		if verbose:
+			print(f"{line[:32]:<37}\t{prob:.3f}")
+			cnt += 1
+			continue
+
+		if prob < threshold:
+			continue
+
+		print(line)
+		cnt += 1
+
+	print(f"[b red]Shown {cnt:,} out of {len(results):,} [{cnt/len(results)*100:.2f}%].", file=sys.stderr)
 
 
 # =================================================================================================
@@ -994,7 +1008,7 @@ if __name__ == "__main__":
 	pr.add_argument("-z", "--noise_corpus", help="Filename with `bad` strings (train only).")
 	pr.add_argument("-j", "--threads", type=int, default=1, help="Number of threads (train only).")
 	pr.add_argument("-d", "--debug", action="store_true", help="Show classification probabilities.")
-	pr.add_argument("--algo", choices=["nb", "nn"], default="nn", help="Algorithm to use.")
+	pr.add_argument("--algo", choices=["nb", "nn", "both"], default="both", help="Algorithm to use.")
 	pr.add_argument("--max_len", type=int, default=32, help="Maximum line length (train only).")
 	pr.add_argument("--epochs", type=int, default=5, help="Number of epochs (train only).")
 	pr.add_argument("--hsize", type=int, default=30, help="Hidden layer size (train only).")
@@ -1012,12 +1026,7 @@ if __name__ == "__main__":
 		else:
 			print(f"[e] Unknown algorithm: {args.algo}.", file=sys.stderr)
 	else:
-		if args.algo == "nb":
-			ClassifyNaiveBayes(args)
-		elif args.algo == "nn":
-			ClassifyNeuralNetwork(args)
-		else:
-			print(f"[e] Unknown algorithm: {args.algo}.", file=sys.stderr)
+		ClassifyMain(args)
 
 	if args.debug:
 		print(f"[b red]Elapsed time: {(time.time()-start_time)/60:.2f} min.", file=sys.stderr)
