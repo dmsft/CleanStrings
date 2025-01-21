@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import string
+import pickle
 import random
 import argparse
 import signal
@@ -10,6 +11,7 @@ import signal
 import torch
 import torch.nn as nn
 import torch.optim as optim
+torch.set_printoptions(threshold=5)
 
 # supporting modules
 import nltk
@@ -27,16 +29,20 @@ install(show_locals=True)
 GOOD_LABEL = True
 NOISE_LABEL = False
 
-# ident pytorch device in use
-dev = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-torch.set_printoptions(threshold=5)
+# pytorch device in use, will be configured in the NN model class
+dev = None
 
+#
+# TODO:
+#
+# - more GUID, date/time, and IP address samples for training
+#
 
 # =================================================================================================
 class LinesFeeder():
 	"""Feed lines of `min_len` from `fname` or `text`, split at `max_len`, remove dupes and LFs."""
 
-	def __init__(self, fname="", min_len=5, max_len=64, text="", chunk_past_max=True):
+	def __init__(self, fname="", min_len=5, max_len=64, text="", chunk_past_max=True, verbose=False):
 
 		if not fname and not text:
 			raise ValueError("Need a filename or text.")
@@ -46,6 +52,7 @@ class LinesFeeder():
 		self._minLen = min_len
 		self._maxLen = max_len
 		self._chunkPastMax = chunk_past_max
+		self._verbose = verbose
 
 
 	def __iter__(self):
@@ -61,7 +68,12 @@ class LinesFeeder():
 	# =============================================================================================
 	def iter_file(self):
 
-		with rOpen(self._inputFile, "r", encoding="utf8", refresh_per_second=5, description=self._inputFile) as fd:
+		if self._verbose:
+			ctx = rOpen(self._inputFile, "r", encoding="utf8", refresh_per_second=5, description=self._inputFile)
+		else:
+			ctx = open(self._inputFile, "r", encoding="utf8")
+
+		with ctx  as fd:
 			while True:
 				lines = fd.readlines(256 * 1024)
 				if not lines:
@@ -192,10 +204,57 @@ class NNDatasetBC(torch.utils.data.Dataset):
 
 
 # =================================================================================================
+class LinearModel(nn.Module):
+
+	def __init__(self, input_size:int, hidden_size:int):
+		super(LinearModel, self).__init__()
+
+		self._in_size = input_size
+		self._hsize = hidden_size
+
+		self._linear_stack = nn.Sequential(
+			nn.Linear(input_size*2, hidden_size),  # double because of mask
+			nn.ELU(),
+			nn.Linear(hidden_size, hidden_size//2),
+			nn.ELU(),
+			nn.Linear(hidden_size//2, hidden_size//3),
+			nn.ELU(),
+			nn.Linear(hidden_size//3, 1),
+			nn.Sigmoid()
+		)
+
+
+	@property
+	def input_dimensions(self):
+		return self._in_size
+
+	@property
+	def hidden_dimensions(self):
+		return self._hsize
+
+
+	# =============================================================================================
+	def forward(self, input:torch.Tensor, mask:torch.Tensor):
+
+
+		# concat input with the mask
+		cat = torch.cat((input, mask), dim=1)  # Shape: (batch_size, input_size + mask_size)
+
+		# run through the sequential layers
+		out = self._linear_stack(cat)
+
+		return out
+
+
+
+# =================================================================================================
 class BilinearModel(nn.Module):
 
 	def __init__(self, input_size:int, hidden_size:int):
 		super(BilinearModel, self).__init__()
+
+		global dev
+		dev = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 		self._in_size = input_size
 		self._hsize = hidden_size
@@ -210,22 +269,18 @@ class BilinearModel(nn.Module):
 			nn.Sigmoid()
 		)
 
-		self._plot_idx = 0
-		# self._viz = VizPlot(input_size*2, hidden_size)  # 0
 
 	@property
 	def input_dimensions(self):
 		return self._in_size
-	
+
 	@property
 	def hidden_dimensions(self):
 		return self._hsize
-	
+
 
 	# =============================================================================================
 	def forward(self, input:torch.Tensor, mask:torch.Tensor):
-
-		# print(f"Input: {input.shape}\n{input}\nMask: {mask.shape}\n{mask}")
 
 		# bilinear layer
 		out = self._bil(input, mask)
@@ -233,35 +288,220 @@ class BilinearModel(nn.Module):
 		# run through the sequential layers
 		out = self._linear_stack(out)
 
-		#print(f"Out: {out.shape}\n{out}")
 		return out
 
 
+# =================================================================================================
+class NaiveBayesClassifier():
+
+	def __init__(self, model_file="", verbose=False):
+
+		self._verbose = verbose
+
+		if model_file:
+			self._classifier = self.load(model_file)
+
+
 	# =============================================================================================
-	def plot(self):
+	def Save(self, fname:str):
 
-		weights = self._linear_stack[self._plot_idx].weight.detach().cpu().numpy()
-		self._viz.plot_weights(weights)
+		with open(fname, "wb") as fd:
+			pickle.dump(self._classifier, fd)
+
+		if self._verbose:
+			print(f"[b red]Model saved to {fname}.", file=sys.stderr)
 
 
 	# =============================================================================================
-	def save_graph(self):
-		self._viz.save_graph(f"plot_bilinear_{self._plot_idx}.png")
+	def Train(self, good_data=[], noise_data=[]):
+
+		if self._verbose:
+			print(f"[b red]Labeling data ...", file=sys.stderr)
+
+		train_set = self.vectorize(good_data[0], noise_data[0])
+		val_set = self.vectorize(good_data[1], noise_data[1], False)
+
+		if self._verbose:
+			start = time.time()
+			print(f"[b red]Training Naive Bayes classifier ...", file=sys.stderr)
+
+		self._classifier = nltk.NaiveBayesClassifier.train(train_set)
+		print(f"Accuracy: {nltk.classify.accuracy(self._classifier, val_set):.2f}")
+
+		if self._verbose:
+			self._classifier.show_most_informative_features()
+			print(f"[b red]Training took {time.time()-start:.2f} sec.", file=sys.stderr)
+
+
+	# =============================================================================================
+	def Classify(self, line:str):
+
+		features = NaiveBayesClassifier.extract_features(line)
+		probability = self._classifier.prob_classify(features)
+
+		good_prob = probability.prob(GOOD_LABEL)
+		noise_prob = probability.prob(NOISE_LABEL)
+
+		return (good_prob, noise_prob)
+
+
+	# =============================================================================================
+	def load(self, fname:str):
+
+		if self._verbose:
+			print(f"[b red]Loading model from {fname} ...", file=sys.stderr)
+
+		try:
+			with open(fname, "rb") as fd:
+				cl = pickle.load(fd)
+				return cl
+		except:
+			raise ValueError("Error loading classifier.")
+
+
+	# =============================================================================================
+	@staticmethod
+	def extract_features(line:str) -> dict:
+		"""Extract features."""
+
+		# remove punctuation, digits and whitespace
+		# table = {ch: " " for ch in string.punctuation + string.digits + string.whitespace}
+		# line = text.translate(str.maketrans(table))
+		vowels = set("aeiou")
+		ft = {}
+
+		tot_len = len(line)
+		ft["tot_len"] = tot_len
+
+		# count words and their average length
+		arr = line.split(" ")
+		a = len(arr)
+		b = sum(map(len, arr))
+		ft["num_words"] = a
+		ft["avg_word_len"] = int(b / a)
+
+		# count vowels
+		ft["num_vowels"] = sum([1 for c in line if c in vowels])
+
+		# count digits and spaces
+		ft["num_digits"] = sum([1 for c in line if c.isdigit()])
+		ft["num_spaces"] = sum([1 for c in line if c.isspace()])
+
+		# count punctuation
+		ft["num_punct"] = sum([1 for c in line if c in string.punctuation])
+
+		# sum and average of char values
+		a = sum([ord(c) for c in line])
+		ft["chr_sum"] = a
+		ft["chr_avg"] = int(a / tot_len)
+
+		# english word frequency
+		# ft["freq"] = int(utils.CalcEnglishFreq(line))
+
+		return ft
+
+
+	# ===============================================================================================
+	def vectorize(self, good_data, noise_data, shuffle=True):
+		"""Convert text to feature vectors and apply labels.."""
+
+		start = time.time()
+		# apply labels, make a new tuple list for each good/noise set
+		# good = [(extract_features(line), GOOD_LABEL) for line in track(good)]
+		# noise = [(extract_features(line), NOISE_LABEL) for line in track(noise)]
+
+		# good  = nltk.classify.apply_features(extract_features, good, False)
+		# good = [(ft, GOOD_LABEL) for ft in good]
+		# noise = nltk.classify.apply_features(extract_features, noise, False)
+		# noise = [(ft, NOISE_LABEL) for ft in noise]
+
+		# apply labels
+		good = [(line, GOOD_LABEL) for line in good_data]
+		noise = [(line, NOISE_LABEL) for line in noise_data]
+
+		# combine the two sets
+		labeled_data = good + noise
+
+		if shuffle:
+			for _ in range(3):
+				random.shuffle(labeled_data)
+
+		labeled_set  = nltk.classify.apply_features(NaiveBayesClassifier.extract_features, labeled_data, True)
+
+		if self._verbose:
+			print(f"[b red]Labeling took {time.time()-start:.2f} sec.", file=sys.stderr)
+
+		return labeled_set
 
 
 # =================================================================================================
-def load_corpus(name=""):
-	"""Download corpus if not available."""
+def TrainNaiveBayes(args):
 
-	try:
-		nltk.data.find("corpora/" + name)
-	except:
-		try:
-			nltk.download(name)
-		except:
-			return False
+	# extract required cli arguments
+	good_file = args.file
+	noise_file = args.noise_corpus
+	min_len = args.min_len
+	max_len = args.max_len
+	model_file = args.model_file + ".pickle"
+	verbose = args.debug
+	val_pct = 0.10
 
-	return True
+	# get and pre-parse the data
+	(good_data, noise_data) = get_data(good_file, noise_file, min_len, max_len)
+
+	# split the data into training and validation sets
+	good_data = split_data(good_data, val_pct)
+	noise_data = split_data(noise_data, val_pct)
+	print_data_stats(good_data, noise_data)
+
+	# train the classifier
+	nb = NaiveBayesClassifier("", verbose)
+	nb.Train(good_data, noise_data)
+
+	# save the classifier
+	nb.Save(model_file)
+
+
+# =================================================================================================
+def ClassifyNaiveBayes(args):
+
+	# extract required cli arguments
+	file = args.file
+	min_len = args.min_len
+	max_len = args.max_len
+	model_file = args.model_file + ".pickle"
+	predict_threshold = args.threshold
+	verbose = args.debug
+
+	# load the classifier
+	nb = NaiveBayesClassifier(model_file, verbose)
+
+	# load the data
+	lines = LinesFeeder(file, min_len, max_len, chunk_past_max=False, verbose=verbose)
+
+	tot = 0
+	cnt = 0
+	for line in lines:
+		tot += 1
+		(good_prob, noise_prob) = nb.Classify(line)
+
+		# debug mode: output classification details
+		if verbose:
+			out = f"{line[:max_len]:<37}\t{good_prob:.3f} | {noise_prob:.3f}"
+			print(out)
+			continue
+
+		# filter out the noise
+		if good_prob < predict_threshold:
+			continue
+
+		cnt += 1
+		print(line)
+
+	if verbose:
+		cnt = tot
+
+	print(f"[b red]Shown {cnt:,} out of {tot:,} [{cnt/tot*100:.2f}%].", file=sys.stderr)
 
 
 # =================================================================================================
@@ -271,6 +511,7 @@ def ClassifyNeuralNetwork(args):
 	# extract required cli arguments
 	threshold = args.threshold
 	min_len = args.min_len
+	max_len = args.max_len
 	model_file = args.model_file
 	text_file = args.file
 	workers = args.threads - 1
@@ -281,7 +522,7 @@ def ClassifyNeuralNetwork(args):
 	model.eval()
 
 	# load file contents, do not chunk and keep long lines
-	lines = LinesFeeder(text_file, min_len, max_len=4096, chunk_past_max=False)
+	lines = LinesFeeder(text_file, min_len, max_len, chunk_past_max=False, verbose=debug)
 	lines = list(lines)  # generator to list
 
 	# Prepare dataset and dataloader
@@ -309,11 +550,10 @@ def ClassifyNeuralNetwork(args):
 		if prob >= threshold:
 			print(lines[idx])
 			hits += 1
-	
+
 	# calc percentage shown vs total
-	if debug:
-		tot = len(lines)
-		print(f"[b red]Shown {hits:,} out of {tot:,} [{hits/tot*100:.2f}%].")
+	tot = len(lines)
+	print(f"[b red]Shown {hits:,} out of {tot:,} [{hits/tot*100:.2f}%].", file=sys.stderr)
 
 
 # =================================================================================================
@@ -345,7 +585,7 @@ def LoadModel(file:str, input_size=0, hidden_size=0):
 	# otherwise iterate CWD and pick the first file that matches the prefix
 		files = os.listdir()
 		prefix = file + "_"
-		
+
 		for fname in files:
 			if not fname.startswith(prefix):
 				continue
@@ -355,15 +595,30 @@ def LoadModel(file:str, input_size=0, hidden_size=0):
 			hidden_size = int(parts[2].split(".")[0])
 			file = fname
 			break
-	
+
 	# make sure we have the parameters
 	if not input_size or not hidden_size:
 		raise ValueError(f"Error loading model: {file}.")
-	
+
 	model = BilinearModel(input_size, hidden_size).to(dev)
 	model.load_state_dict(torch.load(file, weights_only=True))
 
 	return (model, input_size)
+
+
+# =================================================================================================
+def load_corpus(name=""):
+	"""Download corpus if not available."""
+
+	try:
+		nltk.data.find("corpora/" + name)
+	except:
+		try:
+			nltk.download(name)
+		except:
+			return False
+
+	return True
 
 
 # =================================================================================================
@@ -518,15 +773,26 @@ def test_predictions(model, dataloader, threshold=0.85):
 def calc_accuracy(predictions:torch.Tensor, ground_truth:torch.Tensor, threshold=0.85):
 	"""Returns 0-1 accuracy for the given set of predictions and ground truth."""
 
-	pred = predictions.squeeze()
+	# print(f"Predictions: {predictions.shape} {predictions}")
+	# print(f"Ground Truth: {ground_truth}")
 
-	# must be 0.5 since round assumes that as the threshold
+	pred = predictions.squeeze()
+	# print(f"Pred: {pred}")
+
+	# must be 0.5 since round assumes 0.5 as the threshold
 	temp = pred - (threshold - 0.5)
+	# print(f"Temporary: {temp}")
+
 	rounded_predictions = torch.round(temp)
+	# print(f"Rounded Predictions: {rounded_predictions}")
 
 	# rounded_predictions = torch.floor(predictions + (1 - threshold))
 	success = (rounded_predictions == ground_truth).float()  # convert bool to float for div
 	accuracy = success.sum() / len(success)
+
+	# print(f"Success: {success}")
+	# print(f"Accuracy: {accuracy} {accuracy.item()}")
+	# exit()
 
 	return accuracy.item()
 
@@ -577,7 +843,6 @@ def run_batches(model, dataloader, lossFn, optimizer=None):
 		# periodically calculate the average loss of batches
 		if loop_cnt % 100 == 0:
 			epochs_losses.append(np.mean(batch_losses))
-			# model.plot()  # plot the weights
 
 		# progress update every N% of the total dataset
 		if items_cnt // int(tot_items*0.13) > prev:
@@ -588,7 +853,6 @@ def run_batches(model, dataloader, lossFn, optimizer=None):
 			loop_loss = loop_cnt = 0
 			prev = items_cnt // int(tot_items*0.13)
 
-	# model.save_graph()
 	return (loss_sum, accuracy_sum, epochs_losses)
 
 
@@ -611,6 +875,7 @@ def validate(model, dataloader, lossFn):
 def train_epochs(model, train_loader, val_loader, lossFn, optimizer, numEpochs:int, model_file:str):
 
 	print(f"Training on {len(train_loader.dataset):,} samples for {numEpochs} epochs ...")
+
 	best_loss = float('inf')
 	loss_sum = 0
 	epoch_losses = []
@@ -646,9 +911,6 @@ def train_epochs(model, train_loader, val_loader, lossFn, optimizer, numEpochs:i
 
 # =================================================================================================
 def TrainNeuralNetwork(args):
-
-	# show device: cuda or cpu
-	print(f"[b red]Using {dev.type.upper()}")
 
 	# extract required cli arguments
 	good_file = args.file
@@ -700,11 +962,15 @@ def TrainNeuralNetwork(args):
 	)
 
 	# create the model, loss function and optimizer
+	# model = LinearModel(max_len, hidden_size).to(dev)
 	model = BilinearModel(max_len, hidden_size).to(dev)
 	loss_fn = nn.BCELoss()
 	# optimizer = optim.SGD(model.parameters(), lr=learning_rate)
 	# optimizer = optim.Adadelta(model.parameters(), lr=learning_rate)
 	optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+	# show device: cuda or cpu
+	print(f"[b red]Using {dev.type.upper()}") # type: ignore
 
 	# train the model (also saves the one with lowest validation loss)
 	train_epochs(model, train_loader, val_loader, loss_fn, optimizer, epochs, model_file)
@@ -728,6 +994,7 @@ if __name__ == "__main__":
 	pr.add_argument("-z", "--noise_corpus", help="Filename with `bad` strings (train only).")
 	pr.add_argument("-j", "--threads", type=int, default=1, help="Number of threads (train only).")
 	pr.add_argument("-d", "--debug", action="store_true", help="Show classification probabilities.")
+	pr.add_argument("--algo", choices=["nb", "nn"], default="nn", help="Algorithm to use.")
 	pr.add_argument("--max_len", type=int, default=32, help="Maximum line length (train only).")
 	pr.add_argument("--epochs", type=int, default=5, help="Number of epochs (train only).")
 	pr.add_argument("--hsize", type=int, default=30, help="Hidden layer size (train only).")
@@ -738,9 +1005,19 @@ if __name__ == "__main__":
 	signal.signal(signal.SIGINT, lambda x, y: sys.exit(0))
 
 	if args.train:
-		TrainNeuralNetwork(args)
+		if args.algo == "nb":
+			TrainNaiveBayes(args)
+		elif args.algo == "nn":
+			TrainNeuralNetwork(args)
+		else:
+			print(f"[e] Unknown algorithm: {args.algo}.", file=sys.stderr)
 	else:
-		ClassifyNeuralNetwork(args)
+		if args.algo == "nb":
+			ClassifyNaiveBayes(args)
+		elif args.algo == "nn":
+			ClassifyNeuralNetwork(args)
+		else:
+			print(f"[e] Unknown algorithm: {args.algo}.", file=sys.stderr)
 
 	if args.debug:
 		print(f"[b red]Elapsed time: {(time.time()-start_time)/60:.2f} min.", file=sys.stderr)
