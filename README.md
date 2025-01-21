@@ -1,6 +1,6 @@
 # CleanStrings
 
-Train a binary classifier using a simple neural network to distinguish between *clean* and *noisy* strings. The intention is to cleanup **strings** output for faster triage in malware analysis and forensics.
+Train a binary classifier using a simple neural network and a probabilistic one to distinguish between *clean* and *noisy* strings. The intention is to cleanup **strings** output for faster triage in malware analysis and forensics. Currently, the approach is to use a Multilayer Perceptron (MLP) network with just a handful of layers and a Naive Bayes classifier. The text gets fed through both and probability results are averaged before the prediction threshold.
 
 
 # Install
@@ -15,13 +15,13 @@ py -m pip install --upgrade --user torch --index-url https://download.pytorch.or
 
 # Usage
 
-Use the supplied model file which was trained on 21 million samples with 70/30 split for *clean* vs *noise*. Given this simple network it achieves 96% accuracy.
+Use the supplied model files which were trained on 21 million samples with 70/30 split for *clean* vs *noise*. Given this simple design it achieves 96% accuracy.
 
 ```bash
 py CleanStrings.py -h
 
 usage: CleanStrings.py [-h] [-l MIN_LEN] [-y THRESHOLD] [-m MODEL_FILE] [-t] [-z NOISE_CORPUS] [-j THREADS] [-d]
-                       [--max_len MAX_LEN] [--epochs EPOCHS] [--hsize HSIZE]
+                       [--algo {nb,nn}] [--max_len MAX_LEN] [--epochs EPOCHS] [--hsize HSIZE]
                        file
 
 Train and classify 'clean' strings.
@@ -43,6 +43,7 @@ options:
   -j THREADS, --threads THREADS
                         Number of threads (train only). (default: 1)
   -d, --debug           Show classification probabilities. (default: False)
+  --algo {nb,nn}        Algorithm to use. (default: nn)
   --max_len MAX_LEN     Maximum line length (train only). (default: 32)
   --epochs EPOCHS       Number of epochs (train only). (default: 5)
   --hsize HSIZE         Hidden layer size (train only). (default: 30)
