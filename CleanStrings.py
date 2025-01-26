@@ -1,6 +1,5 @@
 import os
 import sys
-from tabnanny import verbose
 import time
 import string
 import pickle
