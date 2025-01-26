@@ -380,15 +380,12 @@ class NaiveBayesClassifier():
 		ft["num_words"] = a
 		ft["avg_word_len"] = int(b / a)
 
-		# count vowels
 		ft["num_vowels"] = sum([1 for c in line if c in vowels])
-
-		# count digits and spaces
 		ft["num_digits"] = sum([1 for c in line if c.isdigit()])
 		ft["num_spaces"] = sum([1 for c in line if c.isspace()])
-
-		# count punctuation
 		ft["num_punct"] = sum([1 for c in line if c in string.punctuation])
+		ft["num_upper"] = sum([1 for c in line if c.isupper()])
+		ft["num_lower"] = sum([1 for c in line if c.islower()])
 
 		# sum and average of char values
 		a = sum([ord(c) for c in line])
