@@ -1,5 +1,6 @@
 import os
 import sys
+from tabnanny import verbose
 import time
 import string
 import pickle
@@ -426,7 +427,7 @@ class NaiveBayesClassifier():
 		labeled_set  = nltk.classify.apply_features(NaiveBayesClassifier.extract_features, labeled_data, True)
 
 		if self._verbose:
-			print(f"[b red]Labeling took {time.time()-start:.2f} sec.", file=sys.stderr)
+			print(f"[b red]Labeled {len(labeled_data):,} items in {time.time()-start:.2f} sec.", file=sys.stderr)
 
 		return labeled_set
 
@@ -444,7 +445,7 @@ def TrainNaiveBayes(args):
 	val_pct = 0.10
 
 	# get and pre-parse the data
-	(good_data, noise_data) = get_data(good_file, noise_file, min_len, max_len)
+	(good_data, noise_data) = get_data(good_file, noise_file, min_len, max_len, verbose)
 
 	# split the data into training and validation sets
 	good_data = split_data(good_data, val_pct)
@@ -674,13 +675,13 @@ def make_random_strings(num:int, min_len:int, max_len:int) -> list[str]:
 	choices = random.choices
 	a = min_len
 	b = max_len
-	lines = ["".join(choices(chars, k=rnd(a, b))) for _ in track(range(num), "random")]
+	lines = ["".join(choices(chars, k=rnd(a, b))) for _ in range(num)]
 
 	return lines
 
 
 # =================================================================================================
-def get_data(good_file:str, noise_file:str, min_len:int, max_len:int):
+def get_data(good_file:str, noise_file:str, min_len:int, max_len:int, verbose=False):
 	"""Get training data (user files, nltk, and random)."""
 
 	good_data = []
@@ -691,11 +692,11 @@ def get_data(good_file:str, noise_file:str, min_len:int, max_len:int):
 	good_data.extend(list(set(lines)))  # remove duplicates
 
 	# good file
-	lines = list(LinesFeeder(good_file, min_len, max_len))
+	lines = list(LinesFeeder(good_file, min_len, max_len, verbose=verbose))
 	good_data.extend(list(set(lines)))  # remove duplicates
 
 	# noise file
-	lines = list(LinesFeeder(noise_file, min_len, max_len))
+	lines = list(LinesFeeder(noise_file, min_len, max_len, verbose=verbose))
 	noise_data.extend(lines)
 
 	# random data, size is a percentage of the total data
@@ -933,6 +934,7 @@ def TrainNeuralNetwork(args):
 	hsize = args.hsize
 	model_file = args.model_file
 	predict_threshold = args.threshold
+	verbose = args.debug
 
 	# parameters
 	learning_rate = 0.001
@@ -943,7 +945,7 @@ def TrainNeuralNetwork(args):
 	padding = -1
 
 	# get and pre-parse the data
-	(good_data, noise_data) = get_data(good_file, noise_file, min_len, max_len)
+	(good_data, noise_data) = get_data(good_file, noise_file, min_len, max_len, verbose)
 
 	# split the data into training and validation sets
 	good_data = split_data(good_data, val_pct)
