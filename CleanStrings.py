@@ -115,8 +115,8 @@ class LinesFeeder():
 		# exclude short lines
 		lines = [ln for ln in all_lines if len(ln) >= self._minLen]
 
-		# remove duplicates
-		lines = list(set(lines))
+		# remove duplicates (keep order)
+		lines = list(dict.fromkeys(lines))
 
 		return lines
 
@@ -523,7 +523,7 @@ def ClassifyMain(args):
 
 	# load the data
 	lines = LinesFeeder(file, min_len, max_len, chunk_past_max=False, verbose=verbose)
-	lines = list(set(lines))  # generator to uniq list
+	lines = list(dict.fromkeys(lines))  # generator to uniq list (order preserved)
 
 	if algo == "nb":
 		results = ClassifyNaiveBayes(model_file, lines)
@@ -541,6 +541,9 @@ def ClassifyMain(args):
 			(_, nn_prob) = nn_results[i]
 			avg_prob = (nb_prob + nn_prob) / 2
 			results.append((line, avg_prob))
+
+			if verbose:
+				print(f"{line[:32]:<37}\t{nb_prob:.3f}\t{nn_prob:.3f}\t{avg_prob:.3f}")
 	else:
 		print(f"[e] Unknown algorithm: {args.algo}.", file=sys.stderr)
 		return
@@ -555,7 +558,8 @@ def print_classification(results=[], threshold=0.85, verbose=False):
 	cnt = 0
 	for (line, prob) in results:
 		if verbose:
-			print(f"{line[:32]:<37}\t{prob:.3f}")
+			hit_color = "[green]" if prob >= threshold else "[red]"
+			print(f"{line[:32]:<37}\t{hit_color}{prob:.3f}")
 			cnt += 1
 			continue
 
