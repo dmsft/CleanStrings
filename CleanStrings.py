@@ -300,7 +300,7 @@ class BilinearModel(nn.Module):
 
 
 	# =================================================================================================
-	@staticmethod
+	@classmethod
 	def Load(cls, file:str, input_size=0, hidden_size=0):
 		"""Load a PyTorch model from `file`."""
 
