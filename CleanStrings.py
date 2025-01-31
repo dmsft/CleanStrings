@@ -32,11 +32,6 @@ NOISE_LABEL = False
 # pytorch device in use, will be configured in the NN model class
 dev = None
 
-#
-# TODO:
-#
-# - more GUID, date/time, and IP address samples for training
-#
 
 # =================================================================================================
 class LinesFeeder():
@@ -209,6 +204,169 @@ class NNDatasetBC(torch.utils.data.Dataset):
 
 
 # =================================================================================================
+class BaseModel(nn.Module):
+
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, **kwargs)
+
+
+	# =================================================================================================
+	@staticmethod
+	def SaveLossGraph(losses:list[float]):
+		"""Save the training loss graph as PNG image."""
+
+		df_loss = pd.DataFrame(enumerate(losses), columns=["batch", "loss"])
+		chart = alt.Chart(df_loss, height=1080, width=1920)
+		chart = chart.mark_line().encode(alt.X("batch"), alt.Y("loss"))
+		chart.save("training_loss.png")
+
+
+	# =================================================================================================
+	@staticmethod
+	def CalcAccuracy(predictions:torch.Tensor, ground_truth:torch.Tensor, threshold=0.85):
+		"""Returns 0-1 accuracy for the given set of predictions and ground truth."""
+
+		# print(f"Predictions: {predictions.shape} {predictions}")
+		# print(f"Ground Truth: {ground_truth}")
+
+		pred = predictions.squeeze()
+		# print(f"Pred: {pred}")
+
+		# must be 0.5 since round assumes 0.5 as the threshold
+		temp = pred - (threshold - 0.5)
+		# print(f"Temporary: {temp}")
+
+		rounded_predictions = torch.round(temp)
+		# print(f"Rounded Predictions: {rounded_predictions}")
+
+		# rounded_predictions = torch.floor(predictions + (1 - threshold))
+		success = (rounded_predictions == ground_truth).float()  # convert bool to float for div
+		accuracy = success.sum() / len(success)
+
+		# print(f"Success: {success}")
+		# print(f"Accuracy: {accuracy} {accuracy.item()}")
+		# exit()
+
+		return accuracy.item()
+
+
+	# =================================================================================================
+	@staticmethod
+	def Validate(model, dataloader, lossFn):
+
+		model.eval()
+		with torch.no_grad():
+			return model.run_batches(model, dataloader, lossFn)
+
+
+	# =================================================================================================
+	@staticmethod
+	def Train(model, train_loader, val_loader, lossFn, optimizer, numEpochs:int, model_file:str):
+
+		print(f"Training on {len(train_loader.dataset):,} samples for {numEpochs} epochs ...")
+
+		best_loss = float('inf')
+		loss_sum = 0
+		epoch_losses = []
+
+		for epoch in range(numEpochs):
+			_ = next(iter(train_loader))  # preemtively load the first batch, this triggeres workers spawning
+			start = time.time()
+
+			# train the model on the training set
+			(loss, accuracy, losses) = model.train_batches(model, train_loader, lossFn, optimizer)
+			loss /= len(train_loader)
+			accuracy /= len(train_loader)
+			print(f'[cyan]Training   Loss: {loss:.3f}  |  Accuracy: {accuracy*100:.2f}%')
+			loss_sum += loss
+
+			# graph the training loss
+			epoch_losses.extend(losses)
+			model.SaveLossGraph(epoch_losses)
+
+			# validate the model on the validation set
+			(loss, accuracy, _) = model.Validate(model, val_loader, lossFn)
+			loss /= len(val_loader)
+			accuracy /= len(val_loader)
+			print(f'[cyan]Validation Loss: {loss:.3f}  |  Accuracy: {accuracy*100:.2f}%')
+
+			# save the best model
+			if loss < best_loss:
+				model.Save(model_file)
+				best_loss = loss
+
+			print(f"[cyan]Epoch: {epoch+1} | Avg Loss: {loss_sum/(epoch+1):.3f} | Elapsed: {time.time()-start:.2f} sec")
+
+
+	# =================================================================================================
+	@staticmethod
+	def train_batches(model, dataloader, lossFn, optim):
+
+		model.train()
+		return model.run_batches(model, dataloader, lossFn, optim)
+
+
+	# =================================================================================================
+	@staticmethod
+	def run_batches(model, dataloader, lossFn, optimizer=None):
+
+		loop_loss = loss_sum = accuracy_sum = 0
+		loop_cnt = prev = items_cnt = 0
+
+		batch_losses:list[float] = []
+		epochs_losses = []
+		tot_items = len(dataloader.dataset)
+
+		start_time = time.time()
+		for (texts, masks, labels) in dataloader:
+			loop_cnt += 1
+			items_cnt += len(texts)
+
+			# move tensor data to device
+			texts = texts.to(dev)
+			masks = masks.to(dev)
+
+			# model's forward pass
+			outputs = model(texts, masks)
+
+			# calculate the loss
+			labels = labels.to(dev)
+			loss = lossFn(outputs, labels.unsqueeze(1))
+			loss_sum += loss.item()
+
+			# accumulate accuracy for the batch
+			accuracy_sum += model.CalcAccuracy(outputs, labels)
+
+			# no optimizer means  we're running validation, skip the rest
+			if None == optimizer:
+				continue
+
+			# collect losses for later stats
+			loop_loss += loss.item()
+			batch_losses.append(loss.item())
+
+			# backpropagate
+			optimizer.zero_grad() # type: ignore
+			loss.backward()
+			optimizer.step() # type: ignore
+
+			# periodically calculate the average loss of batches
+			if loop_cnt % 100 == 0:
+				epochs_losses.append(np.mean(batch_losses))
+
+			# progress update every N% of the total dataset
+			if items_cnt // int(tot_items*0.13) > prev:
+				elapsed = time.time() - start_time
+				print(f"\tSamples {items_cnt:,} [{int(items_cnt/tot_items*100)}%]", end="")
+				print(f"  Loss: {loop_loss/loop_cnt:.3f}", end="")
+				print(f"  Speed: {int(items_cnt/elapsed):,} /sec")
+				loop_loss = loop_cnt = 0
+				prev = items_cnt // int(tot_items*0.13)
+
+		return (loss_sum, accuracy_sum, epochs_losses)
+
+
+# =================================================================================================
 class LinearModel(nn.Module):
 
 	def __init__(self, input_size:int, hidden_size:int):
@@ -252,10 +410,10 @@ class LinearModel(nn.Module):
 
 
 # =================================================================================================
-class BilinearModel(nn.Module):
+class BilinearModel(BaseModel):
 
 	def __init__(self, input_size:int, hidden_size:int):
-		super(BilinearModel, self).__init__()
+		super().__init__()
 
 		global dev
 		dev = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -293,6 +451,44 @@ class BilinearModel(nn.Module):
 		out = self._linear_stack(out)
 
 		return out
+
+
+	# =================================================================================================
+	def TestPredictions(self, dataloader, threshold=0.85):
+
+		# stats counters
+		hit_cnt = good_misses = bad_misses = 0
+		all_probabilities = np.array([])
+		all_labels = np.array([])
+
+		self.to(dev).eval()
+		with torch.no_grad():
+			for (texts, masks, labels) in track(dataloader, "[b red]Final Validation"):
+				# move tensor data to device
+				texts = texts.to(dev)
+				masks = masks.to(dev)
+
+				# run the model on the batch
+				output = self.forward(texts, masks).squeeze().cpu().numpy()
+
+				# collect the probabilities and labels
+				all_probabilities = np.concatenate((all_probabilities, output), axis=0)
+				all_labels = np.concatenate((all_labels, labels.numpy()), axis=0)
+
+		# identify hits and misses
+		expected_labels = (all_labels == 1)
+		predicted_labels = (all_probabilities >= threshold)
+
+		# count the hits and misses
+		hit_cnt += np.sum(predicted_labels == expected_labels)
+		good_misses += np.sum(predicted_labels & ~expected_labels)
+		bad_misses += np.sum(~predicted_labels & expected_labels)
+
+		# print the accuracy
+		tot_size = len(dataloader.dataset)
+		print(f"{hit_cnt:,} out of {tot_size:,} classified correctly [{hit_cnt/tot_size*100:.2f}%].")
+		print(f"{good_misses:,} misclassified as {GOOD_LABEL} [{good_misses/hit_cnt*100:.2f}%].")
+		print(f"{bad_misses:,} misclassified as {NOISE_LABEL} [{bad_misses/hit_cnt*100:.2f}%].")
 
 
 	# =================================================================================================
@@ -742,194 +938,6 @@ def print_data_stats(good_set, noise_set):
 
 
 # =================================================================================================
-def save_loss_graph(losses:list[float]):
-	"""Save the training loss graph as PNG image."""
-
-	df_loss = pd.DataFrame(enumerate(losses), columns=["batch", "loss"])
-	chart = alt.Chart(df_loss, height=1080, width=1920)
-	chart = chart.mark_line().encode(alt.X("batch"), alt.Y("loss"))
-	chart.save("training_loss.png")
-
-
-# =================================================================================================
-def test_predictions(model, dataloader, threshold=0.85):
-
-	# stats counters
-	hit_cnt = good_misses = bad_misses = 0
-	all_probabilities = np.array([])
-	all_labels = np.array([])
-
-	model.to(dev).eval()
-	with torch.no_grad():
-		for (texts, masks, labels) in track(dataloader, "[b red]Final Validation"):
-			# move tensor data to device
-			texts = texts.to(dev)
-			masks = masks.to(dev)
-
-			# run the model on the batch
-			output = model(texts, masks).squeeze().cpu().numpy()
-
-			# collect the probabilities and labels
-			all_probabilities = np.concatenate((all_probabilities, output), axis=0)
-			all_labels = np.concatenate((all_labels, labels.numpy()), axis=0)
-
-	# identify hits and misses
-	expected_labels = (all_labels == 1)
-	predicted_labels = (all_probabilities >= threshold)
-
-	# count the hits and misses
-	hit_cnt += np.sum(predicted_labels == expected_labels)
-	good_misses += np.sum(predicted_labels & ~expected_labels)
-	bad_misses += np.sum(~predicted_labels & expected_labels)
-
-	# print the accuracy
-	tot_size = len(dataloader.dataset)
-	print(f"{hit_cnt:,} out of {tot_size:,} classified correctly [{hit_cnt/tot_size*100:.2f}%].")
-	print(f"{good_misses:,} misclassified as {GOOD_LABEL} [{good_misses/hit_cnt*100:.2f}%].")
-	print(f"{bad_misses:,} misclassified as {NOISE_LABEL} [{bad_misses/hit_cnt*100:.2f}%].")
-
-
-# =================================================================================================
-def calc_accuracy(predictions:torch.Tensor, ground_truth:torch.Tensor, threshold=0.85):
-	"""Returns 0-1 accuracy for the given set of predictions and ground truth."""
-
-	# print(f"Predictions: {predictions.shape} {predictions}")
-	# print(f"Ground Truth: {ground_truth}")
-
-	pred = predictions.squeeze()
-	# print(f"Pred: {pred}")
-
-	# must be 0.5 since round assumes 0.5 as the threshold
-	temp = pred - (threshold - 0.5)
-	# print(f"Temporary: {temp}")
-
-	rounded_predictions = torch.round(temp)
-	# print(f"Rounded Predictions: {rounded_predictions}")
-
-	# rounded_predictions = torch.floor(predictions + (1 - threshold))
-	success = (rounded_predictions == ground_truth).float()  # convert bool to float for div
-	accuracy = success.sum() / len(success)
-
-	# print(f"Success: {success}")
-	# print(f"Accuracy: {accuracy} {accuracy.item()}")
-	# exit()
-
-	return accuracy.item()
-
-
-# =================================================================================================
-def run_batches(model, dataloader, lossFn, optimizer=None):
-
-	loop_loss = loss_sum = accuracy_sum = 0
-	loop_cnt = prev = items_cnt = 0
-
-	batch_losses:list[float] = []
-	epochs_losses = []
-	tot_items = len(dataloader.dataset)
-
-	start_time = time.time()
-	for (texts, masks, labels) in dataloader:
-		loop_cnt += 1
-		items_cnt += len(texts)
-
-		# move tensor data to device
-		texts = texts.to(dev)
-		masks = masks.to(dev)
-
-		# model's forward pass
-		outputs = model(texts, masks)
-
-		# calculate the loss
-		labels = labels.to(dev)
-		loss = lossFn(outputs, labels.unsqueeze(1))
-		loss_sum += loss.item()
-
-		# accumulate accuracy for the batch
-		accuracy_sum += calc_accuracy(outputs, labels)
-
-		# no optimizer means  we're running validation, skip the rest
-		if None == optimizer:
-			continue
-
-		# collect losses for later stats
-		loop_loss += loss.item()
-		batch_losses.append(loss.item())
-
-		# backpropagate
-		optimizer.zero_grad() # type: ignore
-		loss.backward()
-		optimizer.step() # type: ignore
-
-		# periodically calculate the average loss of batches
-		if loop_cnt % 100 == 0:
-			epochs_losses.append(np.mean(batch_losses))
-
-		# progress update every N% of the total dataset
-		if items_cnt // int(tot_items*0.13) > prev:
-			elapsed = time.time() - start_time
-			print(f"\tSamples {items_cnt:,} [{int(items_cnt/tot_items*100)}%]", end="")
-			print(f"  Loss: {loop_loss/loop_cnt:.3f}", end="")
-			print(f"  Speed: {int(items_cnt/elapsed):,} /sec")
-			loop_loss = loop_cnt = 0
-			prev = items_cnt // int(tot_items*0.13)
-
-	return (loss_sum, accuracy_sum, epochs_losses)
-
-
-# =================================================================================================
-def train_batches(model, dataloader, lossFn, optim):
-
-	model.train()
-	return run_batches(model, dataloader, lossFn, optim)
-
-
-# =================================================================================================
-def validate(model, dataloader, lossFn):
-
-	model.eval()
-	with torch.no_grad():
-		return run_batches(model, dataloader, lossFn)
-
-
-# =================================================================================================
-def train_epochs(model, train_loader, val_loader, lossFn, optimizer, numEpochs:int, model_file:str):
-
-	print(f"Training on {len(train_loader.dataset):,} samples for {numEpochs} epochs ...")
-
-	best_loss = float('inf')
-	loss_sum = 0
-	epoch_losses = []
-
-	for epoch in range(numEpochs):
-		_ = next(iter(train_loader))  # preemtively load the first batch, this triggeres workers spawning
-		start = time.time()
-
-		# train the model on the training set
-		(loss, accuracy, losses) = train_batches(model, train_loader, lossFn, optimizer)
-		loss /= len(train_loader)
-		accuracy /= len(train_loader)
-		print(f'[cyan]Training   Loss: {loss:.3f}  |  Accuracy: {accuracy*100:.2f}%')
-		loss_sum += loss
-
-		# graph the training loss
-		epoch_losses.extend(losses)
-		save_loss_graph(epoch_losses)
-
-		# validate the model on the validation set
-		(loss, accuracy, _) = validate(model, val_loader, lossFn)
-		loss /= len(val_loader)
-		accuracy /= len(val_loader)
-		print(f'[cyan]Validation Loss: {loss:.3f}  |  Accuracy: {accuracy*100:.2f}%')
-
-		# save the best model
-		if loss < best_loss:
-			BilinearModel.Save(model_file)
-			best_loss = loss
-
-		print(f"[cyan]Epoch: {epoch+1} | Avg Loss: {loss_sum/(epoch+1):.3f} | Elapsed: {time.time()-start:.2f} sec")
-
-
-# =================================================================================================
 def TrainNeuralNetwork(args):
 
 	# extract required cli arguments
@@ -994,13 +1002,13 @@ def TrainNeuralNetwork(args):
 	print(f"[b red]Using {dev.type.upper()}") # type: ignore
 
 	# train the model (also saves the one with lowest validation loss)
-	train_epochs(model, train_loader, val_loader, loss_fn, optimizer, epochs, model_file)
+	model.Train(model, train_loader, val_loader, loss_fn, optimizer, epochs, model_file)
 
 	# reload the model for testing
 	(model, _) = BilinearModel.Load(model_file, max_len, hidden_size)
 
 	# run a validation test on the final model
-	test_predictions(model, val_loader, predict_threshold)
+	model.TestPredictions(val_loader, predict_threshold)
 
 
 # =================================================================================================
