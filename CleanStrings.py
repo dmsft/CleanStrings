@@ -246,7 +246,6 @@ class LinearModel(nn.Module):
 		return out
 
 
-
 # =================================================================================================
 class BilinearModel(nn.Module):
 
@@ -289,6 +288,57 @@ class BilinearModel(nn.Module):
 		out = self._linear_stack(out)
 
 		return out
+
+
+	# =================================================================================================
+	def Save(self, file_prefix:str):
+		"""Save the PyTorch `model` to file starting with `file_prefix`."""
+
+		# filename is a combination of prefix, input dimensions, and hidden size
+		fname = f"{file_prefix}_{self.input_dimensions}_{self.hidden_dimensions}.model"
+		torch.save(self.state_dict(), fname)
+
+
+	# =================================================================================================
+	@staticmethod
+	def Load(cls, file:str, input_size=0, hidden_size=0):
+		"""Load a PyTorch model from `file`."""
+
+		# filename is a combination of prefix, input dimensions, and hidden size
+
+		# when sizes supplied use them as is
+		if input_size and hidden_size:
+			file = f"{file}_{input_size}_{hidden_size}.model"
+
+		# if the file exists then it was requested via args
+		# extract parameters from the filename
+		elif os.path.isfile(file):
+			parts = file.split("_")
+			input_size = int(parts[1])
+			hidden_size = int(parts[2].split(".")[0])
+		else:
+		# otherwise iterate CWD and pick the first file that matches the prefix
+			files = os.listdir()
+			prefix = file + "_"
+
+			for fname in files:
+				if not fname.startswith(prefix):
+					continue
+
+				parts = fname.split("_")
+				input_size = int(parts[1])
+				hidden_size = int(parts[2].split(".")[0])
+				file = fname
+				break
+
+		# make sure we have the parameters
+		if not input_size or not hidden_size:
+			raise ValueError(f"Error loading model: {file}.")
+
+		model = BilinearModel(input_size, hidden_size).to(dev)
+		model.load_state_dict(torch.load(file, weights_only=True))
+
+		return (model, input_size)
 
 
 # =================================================================================================
@@ -478,7 +528,7 @@ def ClassifyNeuralNetwork(model_prefix="", lines=[]) -> list:
 	"""Read a text file and classify each line using the neural network model, printing good lines."""
 
 	# load a saved model
-	(model, dimensions) = LoadModel(model_prefix)
+	(model, dimensions) = BilinearModel.Load(model_prefix)
 	model.eval()
 
 	# Prepare dataset and dataloader
@@ -569,56 +619,6 @@ def print_classification(results=[], threshold=0.85, verbose=False):
 		cnt += 1
 
 	print(f"[b red]Shown {cnt:,} out of {len(results):,} [{cnt/len(results)*100:.2f}%].", file=sys.stderr)
-
-
-# =================================================================================================
-def SaveModel(file_prefix:str, model):
-	"""Save the PyTorch `model` to file starting with `file_prefix`."""
-
-	# filename is a combination of prefix, input dimensions, and hidden size
-	fname = f"{file_prefix}_{model.input_dimensions}_{model.hidden_dimensions}.model"
-	torch.save(model.state_dict(), fname)
-
-
-# =================================================================================================
-def LoadModel(file:str, input_size=0, hidden_size=0):
-	"""Load a PyTorch model from `file`."""
-
-	# filename is a combination of prefix, input dimensions, and hidden size
-
-	# when sizes supplied use them as is
-	if input_size and hidden_size:
-		file = f"{file}_{input_size}_{hidden_size}.model"
-
-	# if the file exists then it was requested via args
-	# extract parameters from the filename
-	elif os.path.isfile(file):
-		parts = file.split("_")
-		input_size = int(parts[1])
-		hidden_size = int(parts[2].split(".")[0])
-	else:
-	# otherwise iterate CWD and pick the first file that matches the prefix
-		files = os.listdir()
-		prefix = file + "_"
-
-		for fname in files:
-			if not fname.startswith(prefix):
-				continue
-
-			parts = fname.split("_")
-			input_size = int(parts[1])
-			hidden_size = int(parts[2].split(".")[0])
-			file = fname
-			break
-
-	# make sure we have the parameters
-	if not input_size or not hidden_size:
-		raise ValueError(f"Error loading model: {file}.")
-
-	model = BilinearModel(input_size, hidden_size).to(dev)
-	model.load_state_dict(torch.load(file, weights_only=True))
-
-	return (model, input_size)
 
 
 # =================================================================================================
@@ -918,7 +918,7 @@ def train_epochs(model, train_loader, val_loader, lossFn, optimizer, numEpochs:i
 
 		# save the best model
 		if loss < best_loss:
-			SaveModel(model_file, model)
+			BilinearModel.Save(model_file)
 			best_loss = loss
 
 		print(f"[cyan]Epoch: {epoch+1} | Avg Loss: {loss_sum/(epoch+1):.3f} | Elapsed: {time.time()-start:.2f} sec")
@@ -992,7 +992,7 @@ def TrainNeuralNetwork(args):
 	train_epochs(model, train_loader, val_loader, loss_fn, optimizer, epochs, model_file)
 
 	# reload the model for testing
-	(model, _) = LoadModel(model_file, max_len, hidden_size)
+	(model, _) = BilinearModel.Load(model_file, max_len, hidden_size)
 
 	# run a validation test on the final model
 	test_predictions(model, val_loader, predict_threshold)
