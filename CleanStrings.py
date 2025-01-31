@@ -135,10 +135,11 @@ class LinesFeeder():
 # =================================================================================================
 class NNDatasetBC(torch.utils.data.Dataset):
 
-	def __init__(self, good_data, bad_data, max_len, pad_value=-1):
+	def __init__(self, good_data, bad_data, max_len, pad_value=-1, shuffle=True):
 
 		self._pad = pad_value
 		self._maxLen = max_len
+		self._shuffle = shuffle
 		self._data = np.array([])
 		self._labels = np.array([])
 
@@ -184,10 +185,14 @@ class NNDatasetBC(torch.utils.data.Dataset):
 			labels = np.concatenate((labels, np.zeros(len(bad_data), dtype=np.float32)), axis=0)
 
 		# shuffle data and labels without loosing the order
-		indices = np.arange(len(data))
-		np.random.shuffle(indices)
-		self._data = data[indices]
-		self._labels = labels[indices]
+		if self._shuffle:
+			indices = np.arange(len(data))
+			np.random.shuffle(indices)
+			self._data = data[indices]
+			self._labels = labels[indices]
+		else:
+			self._data = data
+			self._labels = labels
 
 
 	# =================================================================================================
@@ -510,7 +515,7 @@ def TrainNaiveBayes(args):
 
 
 # =================================================================================================
-def ClassifyNaiveBayes(model_prefix="", lines=[]) -> list:
+def ClassifyNaiveBayes(model_prefix="", lines=[]) -> list[tuple[str, float]]:
 
 	# load the classifier
 	nb = NaiveBayesClassifier(model_prefix + ".pickle")
@@ -524,7 +529,7 @@ def ClassifyNaiveBayes(model_prefix="", lines=[]) -> list:
 
 
 # =================================================================================================
-def ClassifyNeuralNetwork(model_prefix="", lines=[]) -> list:
+def ClassifyNeuralNetwork(model_prefix="", lines=[]) -> list[tuple[str, float]]:
 	"""Read a text file and classify each line using the neural network model, printing good lines."""
 
 	# load a saved model
@@ -532,7 +537,7 @@ def ClassifyNeuralNetwork(model_prefix="", lines=[]) -> list:
 	model.eval()
 
 	# Prepare dataset and dataloader
-	ds = NNDatasetBC(lines, [], dimensions)  # there's no noise data
+	ds = NNDatasetBC(lines, [], dimensions, shuffle=False)  # there's no noise data
 	data_loader = torch.utils.data.DataLoader(
 		ds, batch_size=256,
 		shuffle=False, # retain order (this is important)
