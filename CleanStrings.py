@@ -592,7 +592,7 @@ def ClassifyMain(args):
 			results.append((line, avg_prob))
 
 			if verbose:
-				print(f"{line[:32]:<37}\t{nb_prob:.3f}\t{nn_prob:.3f}\t{avg_prob:.3f}")
+				print(f"{line[:32]:<37}\t[{nb_prob:.3f}\t{nn_prob:.3f}] = {avg_prob:.3f}")
 	else:
 		print(f"[e] Unknown algorithm: {args.algo}.", file=sys.stderr)
 		return
