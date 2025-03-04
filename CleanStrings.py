@@ -20,7 +20,7 @@ import pandas as pd
 import numpy as np
 
 # pretty output and progress bars
-from rich import print
+from rich import print as rPrint
 from rich.progress import track, open as rOpen
 from rich.traceback import install
 install(show_locals=True)
@@ -793,7 +793,11 @@ def ClassifyMain(args):
 			results.append((line, avg_prob))
 
 			if verbose:
-				print(f"{line[:32]:<37}\t[{nb_prob:.3f}\t{nn_prob:.3f}] = {avg_prob:.3f}")
+				try:
+					rPrint(f"{line[:32]:<37}\t[{nb_prob:.3f}\t{nn_prob:.3f}] = {avg_prob:.3f}")
+				except UnicodeEncodeError:
+					print(f"{line[:32]:<37}\t[{nb_prob:.3f}\t{nn_prob:.3f}] = {avg_prob:.3f}")
+
 	else:
 		print(f"[e] Unknown algorithm: {args.algo}.", file=sys.stderr)
 		return
