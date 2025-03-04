@@ -6,6 +6,7 @@ import pickle
 import random
 import argparse
 import signal
+import multiprocessing as mp
 
 # PyTorch
 import torch
@@ -770,50 +771,115 @@ def ClassifyMain(args):
 	verbose = args.debug
 	model_file = args.model_file
 	threshold = args.threshold
+	threads = args.threads
+
+	# init queues
+	input_queue = mp.Queue(threads * 3)
+	results_queue = mp.Queue(threads * 3)
+	procs = []
+
+	# spawn the dispatcher
+	t = mp.Process(target=classify_dispatch, args=(input_queue, file, min_len, max_len, threads, verbose))
+	t.start()
+	procs.append(t)
+
+	# spawn workers
+	for _ in range(threads):
+		t = mp.Process(target=classify_worker, args=(input_queue, results_queue, algo, model_file, verbose))
+		t.start()
+		procs.append(t)
+
+	# iterate results queue
+	num_threads_done = 0
+	cnt = total = 0
+	while True:
+		results = results_queue.get()
+
+		# when the worker thread is done it sends None
+		if results is None:
+			num_threads_done += 1
+
+			# we need to make sure all threads are finished before breaking the loop
+			if num_threads_done == threads:
+				break
+			else:
+				continue
+
+		cnt += print_classification(results, threshold, verbose)
+		total += len(results)
+
+	# Wait for all threads to finish
+	for t in procs:
+		t.join()
+
+	rPrint(f"[b red]Shown {cnt:,} out of {total:,} [{cnt/total*100:.2f}%].", file=sys.stderr)
+
+
+
+# =================================================================================================
+def classify_dispatch(queue:mp.Queue, file:str, min_len:int, max_len:int, threads:int, verbose=False):
+	"""Dispatch lines to worker processes."""
 
 	# load the data
 	lines = LinesFeeder(file, min_len, max_len, chunk_past_max=False, verbose=verbose)
 	lines = list(dict.fromkeys(lines))  # generator to uniq list (order preserved)
 
-	if algo == "nb":
-		results = ClassifyNaiveBayes(model_file, lines)
-	elif algo == "nn":
-		results = ClassifyNeuralNetwork(model_file, lines)
-	elif algo == "both":
-		nb_results = ClassifyNaiveBayes(model_file, lines)
-		nn_results = ClassifyNeuralNetwork(model_file, lines)
+	chunk_size = len(lines) // threads
+	for i in range(0, len(lines), chunk_size):
+		queue.put(lines[i:i+chunk_size])
 
-		assert len(nb_results) == len(nn_results)
-		assert nb_results[0][0] == nn_results[0][0]
-
-		results = []
-		for i, (line, nb_prob) in enumerate(nb_results):
-			(_, nn_prob) = nn_results[i]
-			avg_prob = (nb_prob + nn_prob) / 2
-			results.append((line, avg_prob))
-
-			if verbose:
-				try:
-					rPrint(f"{line[:32]:<37}\t[{nb_prob:.3f}\t{nn_prob:.3f}] = {avg_prob:.3f}")
-				except UnicodeEncodeError:
-					print(f"{line[:32]:<37}\t[{nb_prob:.3f}\t{nn_prob:.3f}] = {avg_prob:.3f}")
-
-	else:
-		print(f"[e] Unknown algorithm: {args.algo}.", file=sys.stderr)
-		return
-
-	print_classification(results, threshold, verbose)
+	# signal the workers to stop
+	for _ in range(threads):
+		queue.put(None)
 
 
 # =================================================================================================
-def print_classification(results=[], threshold=0.85, verbose=False):
+def classify_worker(in_queue:mp.Queue, out_queue:mp.Queue, algo:str, model_file:str, verbose=False):
+	"""Worker process to classify lines."""
+
+	while True:
+		lines = in_queue.get()
+		if not lines:
+			break
+
+		if algo == "nb":
+			results = ClassifyNaiveBayes(model_file, lines)
+		elif algo == "nn":
+			results = ClassifyNeuralNetwork(model_file, lines)
+		elif algo == "both":
+			nb_results = ClassifyNaiveBayes(model_file, lines)
+			nn_results = ClassifyNeuralNetwork(model_file, lines)
+
+			assert len(nb_results) == len(nn_results)
+			assert nb_results[0][0] == nn_results[0][0]
+
+			results = []
+			for i, (line, nb_prob) in enumerate(nb_results):
+				(_, nn_prob) = nn_results[i]
+				avg_prob = (nb_prob + nn_prob) / 2
+				results.append((line, avg_prob))
+
+				if verbose:
+					try:
+						rPrint(f"{line[:32]:<37}\t[{nb_prob:.3f}\t{nn_prob:.3f}] = {avg_prob:.3f}")
+					except UnicodeEncodeError:
+						print(f"{line[:32]:<37}\t[{nb_prob:.3f}\t{nn_prob:.3f}] = {avg_prob:.3f}")
+
+		out_queue.put(results)
+
+	# signal to the consumer that we're done
+	out_queue.put(None)
+
+
+# =================================================================================================
+def print_classification(results=[], threshold=0.85, verbose=False) -> int:
 	"""Print classification results."""
 
 	cnt = 0
 	for (line, prob) in results:
 		if verbose:
 			hit_color = "[green]" if prob >= threshold else "[red]"
-			print(f"{line[:32]:<37}\t{hit_color}{prob:.3f}")
+			rPrint(f"{line[:32]:<37}\t{hit_color}{prob:.3f}")
 			cnt += 1
 			continue
 
@@ -823,7 +889,7 @@ def print_classification(results=[], threshold=0.85, verbose=False):
 		print(line)
 		cnt += 1
 
-	print(f"[b red]Shown {cnt:,} out of {len(results):,} [{cnt/len(results)*100:.2f}%].", file=sys.stderr)
+	return cnt
 
 
 # =================================================================================================
@@ -1025,7 +1091,7 @@ if __name__ == "__main__":
 	pr.add_argument("-m", "--model_file", help="Model filename prefix.", default="CleanStrings")
 	pr.add_argument("-t", "--train", action="store_true", help="Train a classifier.")
 	pr.add_argument("-z", "--noise_corpus", help="Filename with `bad` strings (train only).")
-	pr.add_argument("-j", "--threads", type=int, default=1, help="Number of threads (train only).")
+	pr.add_argument("-j", "--threads", type=int, default=1, help="Number of threads.")
 	pr.add_argument("-d", "--debug", action="store_true", help="Show classification probabilities.")
 	pr.add_argument("--algo", choices=["nb", "nn", "both"], default="both", help="Algorithm to use.")
 	pr.add_argument("--max_len", type=int, default=32, help="Maximum line length (train only).")
@@ -1048,4 +1114,4 @@ if __name__ == "__main__":
 		ClassifyMain(args)
 
 	if args.debug:
-		print(f"[b red]Elapsed time: {(time.time()-start_time)/60:.2f} min.", file=sys.stderr)
+		rPrint(f"[b red]Elapsed time: {(time.time()-start_time)/60:.2f} min.", file=sys.stderr)
