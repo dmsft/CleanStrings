@@ -586,7 +586,7 @@ class NaiveBayesClassifier():
 
 
 	# =============================================================================================
-	def Classify(self, lines:list[str]) -> list[tuple[str, float, float]]:
+	def Classify(self, lines:list[str]) -> list[tuple[str, float]]:
 
 		out = []
 		for line in lines:
@@ -594,9 +594,9 @@ class NaiveBayesClassifier():
 			probability = self._classifier.prob_classify(features)
 
 			good_prob = probability.prob(GOOD_LABEL)
-			noise_prob = probability.prob(NOISE_LABEL)
+			# noise_prob = probability.prob(NOISE_LABEL)
 
-			out.append((line, good_prob, noise_prob))
+			out.append((line, good_prob))
 
 		return out
 
@@ -838,7 +838,7 @@ def classify_worker(in_queue:mp.Queue, out_queue:mp.Queue, algo:str, model_file:
 	"""Worker process to classify lines."""
 
 	# load NB model
-	if algo == "nb":
+	if algo in ["nb", "both"]:
 		nb = NaiveBayesClassifier(model_file + ".pickle")
 
 	while True:
@@ -1095,7 +1095,7 @@ if __name__ == "__main__":
 	pr.add_argument("-m", "--model_file", help="Model filename prefix.", default="CleanStrings")
 	pr.add_argument("-t", "--train", action="store_true", help="Train a classifier.")
 	pr.add_argument("-z", "--noise_corpus", help="Filename with `bad` strings (train only).")
-	pr.add_argument("-j", "--threads", type=int, default=1, help="Number of threads.")
+	pr.add_argument("-j", "--threads", type=int, default=0, help="Number of threads.")
 	pr.add_argument("-d", "--debug", action="store_true", help="Show classification probabilities.")
 	pr.add_argument("--algo", choices=["nb", "nn", "both"], default="both", help="Algorithm to use.")
 	pr.add_argument("--max_len", type=int, default=32, help="Maximum line length (train only).")
@@ -1108,6 +1108,9 @@ if __name__ == "__main__":
 	signal.signal(signal.SIGINT, lambda x, y: sys.exit(0))
 
 	if args.train:
+		if args.threads == 0:
+			args.threads = 5
+
 		if args.algo == "nb":
 			TrainNaiveBayes(args)
 		elif args.algo == "nn":
@@ -1115,6 +1118,9 @@ if __name__ == "__main__":
 		else:
 			print(f"[e] Unknown algorithm: {args.algo}.", file=sys.stderr)
 	else:
+		if args.threads == 0:
+			args.threads = os.cpu_count()
+
 		ClassifyMain(args)
 
 	if args.debug:
