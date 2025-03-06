@@ -586,15 +586,19 @@ class NaiveBayesClassifier():
 
 
 	# =============================================================================================
-	def Classify(self, line:str):
+	def Classify(self, lines:list[str]) -> list[tuple[str, float, float]]:
 
-		features = NaiveBayesClassifier.extract_features(line)
-		probability = self._classifier.prob_classify(features)
+		out = []
+		for line in lines:
+			features = NaiveBayesClassifier.extract_features(line)
+			probability = self._classifier.prob_classify(features)
 
-		good_prob = probability.prob(GOOD_LABEL)
-		noise_prob = probability.prob(NOISE_LABEL)
+			good_prob = probability.prob(GOOD_LABEL)
+			noise_prob = probability.prob(NOISE_LABEL)
 
-		return (good_prob, noise_prob)
+			out.append((line, good_prob, noise_prob))
+
+		return out
 
 
 	# =============================================================================================
@@ -712,26 +716,22 @@ def TrainNaiveBayes(args):
 
 
 # =================================================================================================
-def ClassifyNaiveBayes(model_prefix="", lines=[]) -> list[tuple[str, float]]:
-
-	# load the classifier
-	nb = NaiveBayesClassifier(model_prefix + ".pickle")
-
-	out = []
-	for line in lines:
-		(good_prob, _) = nb.Classify(line)
-		out.append((line, good_prob))
-
-	return out
-
-
-# =================================================================================================
+cls_nn_model = None
+cls_nn_dimensions = 0
 def ClassifyNeuralNetwork(model_prefix="", lines=[]) -> list[tuple[str, float]]:
 	"""Read a text file and classify each line using the neural network model, printing good lines."""
 
+	global cls_nn_model, cls_nn_dimensions
+
 	# load a saved model
-	(model, dimensions) = BilinearModel.Load(model_prefix)
-	model.eval()
+	if not cls_nn_model:
+		(model, dimensions) = BilinearModel.Load(model_prefix)
+		model.eval()
+		cls_nn_model = model
+		cls_nn_dimensions = dimensions
+	else:
+		model = cls_nn_model
+		dimensions = cls_nn_dimensions
 
 	# Prepare dataset and dataloader
 	ds = NNDatasetBC(lines, [], dimensions, shuffle=False)  # there's no noise data
@@ -837,17 +837,21 @@ def classify_dispatch(queue:mp.Queue, file:str, min_len:int, max_len:int, thread
 def classify_worker(in_queue:mp.Queue, out_queue:mp.Queue, algo:str, model_file:str, verbose=False):
 	"""Worker process to classify lines."""
 
+	# load NB model
+	if algo == "nb":
+		nb = NaiveBayesClassifier(model_file + ".pickle")
+
 	while True:
 		lines = in_queue.get()
 		if not lines:
 			break
 
 		if algo == "nb":
-			results = ClassifyNaiveBayes(model_file, lines)
+			results = nb.Classify(lines)
 		elif algo == "nn":
 			results = ClassifyNeuralNetwork(model_file, lines)
 		elif algo == "both":
-			nb_results = ClassifyNaiveBayes(model_file, lines)
+			nb_results = nb.Classify(lines)
 			nn_results = ClassifyNeuralNetwork(model_file, lines)
 
 			assert len(nb_results) == len(nn_results)
