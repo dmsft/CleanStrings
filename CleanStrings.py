@@ -23,6 +23,7 @@ import win32api, win32process, win32con
 
 # pretty output and progress bars
 from rich import print as rPrint
+from rich.markup import escape
 from rich.progress import track, open as rOpen
 from rich.traceback import install
 install(show_locals=True)
@@ -610,14 +611,13 @@ class NaiveBayesClassifier():
 	def Classify(self, lines:list[str]) -> list[tuple[str, float]]:
 
 		out = []
-		for line in lines:
-			features = NaiveBayesClassifier.extract_features(line)
-			probability = self._classifier.prob_classify(features)
+		features = [NaiveBayesClassifier.extract_features(line) for line in lines]
 
+		for i in range(len(lines)):
+			probability = self._classifier.prob_classify(features[i])
 			good_prob = probability.prob(GOOD_LABEL)
 			# noise_prob = probability.prob(NOISE_LABEL)
-
-			out.append((line, good_prob))
+			out.append((lines[i], good_prob))
 
 		return out
 
@@ -852,7 +852,7 @@ def classify_dispatch(queue:mp.Queue, file:str, min_len:int, max_len:int, thread
 	lines = LinesFeeder(file, min_len, max_len, chunk_past_max=False, verbose=verbose)
 	lines = list(dict.fromkeys(lines))  # generator to uniq list (order preserved)
 
-	chunk_size = len(lines) // threads
+	chunk_size = len(lines) // (threads*7)
 	for i in range(0, len(lines), chunk_size):
 		queue.put(lines[i:i+chunk_size])
 
@@ -895,7 +895,7 @@ def classify_worker(in_queue:mp.Queue, out_queue:mp.Queue, algo:str, model_file:
 
 				if verbose:
 					try:
-						rPrint(f"{line[:32]:<37}\t[{nb_prob:.3f}\t{nn_prob:.3f}] = {avg_prob:.3f}")
+						rPrint(f"{escape(line[:32]):<37}\t[{nb_prob:.3f}\t{nn_prob:.3f}] = {avg_prob:.3f}")
 					except:
 						print(f"{line[:32]:<37}\t[{nb_prob:.3f}\t{nn_prob:.3f}] = {avg_prob:.3f}")
 
@@ -913,7 +913,7 @@ def print_classification(results=[], threshold=0.85, verbose=False) -> int:
 	for (line, prob) in results:
 		if verbose:
 			hit_color = "[green]" if prob >= threshold else "[red]"
-			rPrint(f"{line[:32]:<37}\t{hit_color}{prob:.3f}")
+			rPrint(f"{escape(line[:32]):<37}\t{hit_color}{prob:.3f}")
 			cnt += 1
 			continue
 
