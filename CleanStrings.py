@@ -35,6 +35,14 @@ NOISE_LABEL = False
 dev = None
 
 
+# =================================================================================================
+def CountLines(fname=""):
+	"""Count the number of lines in a file."""
+
+	with open(fname, "r") as f:
+		return sum(1 for _ in f)
+
+
 # =============================================================================================
 def LowerPriority():
 	"""Set the priority class of this process (normal, above, or below)."""
@@ -784,7 +792,15 @@ def ClassifyMain(args):
 	verbose = args.debug
 	model_file = args.model_file
 	threshold = args.threshold
-	threads = args.threads
+	threads = os.cpu_count() if args.threads == 0 else args.threads
+
+	# launching multiple processes only makes sense on large input file
+	if threads > 1:
+		num_lines = CountLines(file)
+
+		# one thread as long as there are less than 100 lines per thread
+		if num_lines//threads < 100:
+			threads = 1
 
 	# init queues
 	input_queue = mp.Queue(threads * 3)
@@ -848,6 +864,8 @@ def classify_dispatch(queue:mp.Queue, file:str, min_len:int, max_len:int, thread
 # =================================================================================================
 def classify_worker(in_queue:mp.Queue, out_queue:mp.Queue, algo:str, model_file:str, verbose=False):
 	"""Worker process to classify lines."""
+
+	LowerPriority()
 
 	# load NB model
 	if algo in ["nb", "both"]:
@@ -1137,10 +1155,6 @@ if __name__ == "__main__":
 		else:
 			print(f"[e] Unknown algorithm: {args.algo}.", file=sys.stderr)
 	else:
-		if args.threads == 0:
-			args.threads = os.cpu_count()
-			LowerPriority()
-
 		ClassifyMain(args)
 
 	if args.debug:
