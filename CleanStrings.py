@@ -19,6 +19,7 @@ import nltk
 import altair as alt
 import pandas as pd
 import numpy as np
+import win32api, win32process, win32con
 
 # pretty output and progress bars
 from rich import print as rPrint
@@ -32,6 +33,18 @@ NOISE_LABEL = False
 
 # pytorch device in use, will be configured in the NN model class
 dev = None
+
+
+# =============================================================================================
+def LowerPriority():
+	"""Set the priority class of this process (normal, above, or below)."""
+
+	# https://mhammond.github.io/pywin32/modules.html
+	prcl = win32process.BELOW_NORMAL_PRIORITY_CLASS
+	pid = win32api.GetCurrentProcessId()
+	handle = win32api.OpenProcess(win32con.PROCESS_ALL_ACCESS, True, pid)
+	win32process.SetPriorityClass(handle, prcl)
+	win32api.CloseHandle(handle)
 
 
 # =================================================================================================
@@ -815,7 +828,6 @@ def ClassifyMain(args):
 	rPrint(f"[b red]Shown {cnt:,} out of {total:,} [{cnt/total*100:.2f}%].", file=sys.stderr)
 
 
-
 # =================================================================================================
 def classify_dispatch(queue:mp.Queue, file:str, min_len:int, max_len:int, threads:int, verbose=False):
 	"""Dispatch lines to worker processes."""
@@ -866,7 +878,7 @@ def classify_worker(in_queue:mp.Queue, out_queue:mp.Queue, algo:str, model_file:
 				if verbose:
 					try:
 						rPrint(f"{line[:32]:<37}\t[{nb_prob:.3f}\t{nn_prob:.3f}] = {avg_prob:.3f}")
-					except UnicodeEncodeError:
+					except:
 						print(f"{line[:32]:<37}\t[{nb_prob:.3f}\t{nn_prob:.3f}] = {avg_prob:.3f}")
 
 		out_queue.put(results)
@@ -1107,6 +1119,13 @@ if __name__ == "__main__":
 	# handle Ctrl-C
 	signal.signal(signal.SIGINT, lambda x, y: sys.exit(0))
 
+	# show CUDA status
+	if args.debug:
+		if torch.cuda.is_available():
+			rPrint(f"[cyan]CUDA enabled.", file=sys.stderr)
+		else:
+			rPrint(f"[red]CUDA disabled.", file=sys.stderr)
+
 	if args.train:
 		if args.threads == 0:
 			args.threads = 5
@@ -1120,6 +1139,7 @@ if __name__ == "__main__":
 	else:
 		if args.threads == 0:
 			args.threads = os.cpu_count()
+			LowerPriority()
 
 		ClassifyMain(args)
 
