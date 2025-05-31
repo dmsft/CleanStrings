@@ -411,7 +411,7 @@ class LinearModel(nn.Module):
 # =================================================================================================
 class BilinearModel(BaseModel):
 
-	def __init__(self, input_size:int, hidden_size:int):
+	def __init__(self, input_size: int, hidden_size: int):
 		super().__init__()
 
 		global dev
@@ -441,7 +441,7 @@ class BilinearModel(BaseModel):
 
 
 	# =============================================================================================
-	def forward(self, input:torch.Tensor, mask:torch.Tensor):
+	def forward(self, input: torch.Tensor, mask: torch.Tensor):
 
 		# bilinear layer
 		out = self._bil(input, mask)
@@ -491,7 +491,7 @@ class BilinearModel(BaseModel):
 
 
 	# =================================================================================================
-	def Save(self, file_prefix:str):
+	def Save(self, file_prefix: str):
 		"""Save the PyTorch `model` to file starting with `file_prefix`."""
 
 		# filename is a combination of prefix, input dimensions, and hidden size
@@ -501,7 +501,7 @@ class BilinearModel(BaseModel):
 
 	# =================================================================================================
 	@classmethod
-	def Load(cls, file:str, input_size=0, hidden_size=0):
+	def Load(cls, file: str, input_size=0, hidden_size=0):
 		"""Load a PyTorch model from `file`."""
 
 		# filename is a combination of prefix, input dimensions, and hidden size
@@ -553,7 +553,7 @@ class NaiveBayesClassifier():
 
 
 	# =============================================================================================
-	def Save(self, fname:str):
+	def Save(self, fname: str):
 
 		with open(fname, "wb") as fd:
 			pickle.dump(self._classifier, fd)
@@ -585,7 +585,7 @@ class NaiveBayesClassifier():
 
 
 	# =============================================================================================
-	def Classify(self, lines:list[str]) -> list[tuple[str, float]]:
+	def Classify(self, lines: list[str]) -> list[tuple[str, float]]:
 
 		out = []
 		features = [NaiveBayesClassifier.extract_features(line) for line in lines]
@@ -600,7 +600,7 @@ class NaiveBayesClassifier():
 
 
 	# =============================================================================================
-	def load(self, fname:str):
+	def load(self, fname: str):
 
 		if self._verbose:
 			print(f"[b red]Loading model from {fname} ...", file=sys.stderr)
@@ -615,7 +615,7 @@ class NaiveBayesClassifier():
 
 	# =============================================================================================
 	@staticmethod
-	def extract_features(line:str) -> dict:
+	def extract_features(line: str) -> dict:
 		"""Extract features."""
 
 		# remove punctuation, digits and whitespace
@@ -822,7 +822,7 @@ def ClassifyMain(args):
 
 
 # =================================================================================================
-def classify_dispatch(queue:mp.Queue, file:str, min_len:int, max_len:int, threads:int, verbose=False):
+def classify_dispatch(queue: mp.Queue, file: str, min_len: int, max_len: int, threads: int, verbose=False):
 	"""Dispatch lines to worker processes."""
 
 	# load the data
@@ -839,7 +839,7 @@ def classify_dispatch(queue:mp.Queue, file:str, min_len:int, max_len:int, thread
 
 
 # =================================================================================================
-def classify_worker(in_queue:mp.Queue, out_queue:mp.Queue, algo:str, model_file:str, verbose=False):
+def classify_worker(in_queue: mp.Queue, out_queue: mp.Queue, algo: str, model_file: str, verbose=False):
 	"""Worker process to classify lines."""
 
 	# load NB model
@@ -917,7 +917,7 @@ def load_corpus(name=""):
 
 
 # =================================================================================================
-def get_corpus_data(min_len:int, max_len:int) -> list[str]:
+def get_corpus_data(min_len: int, max_len: int) -> list[str]:
 	"""Get unique lines from NLTK corpora, honor `min_len` and split at `max_len`."""
 
 	# load the corpora, not critical if there's no data
@@ -950,7 +950,7 @@ def get_corpus_data(min_len:int, max_len:int) -> list[str]:
 
 
 # =================================================================================================
-def make_random_strings(num:int, min_len:int, max_len:int) -> list[str]:
+def make_random_strings(num: int, min_len: int, max_len: int) -> list[str]:
 	"""Generate `num` random strings between `min_len` and `max_len` in length."""
 
 	chars = string.ascii_letters + string.digits + string.punctuation
@@ -964,7 +964,7 @@ def make_random_strings(num:int, min_len:int, max_len:int) -> list[str]:
 
 
 # =================================================================================================
-def get_data(good_file:str, noise_file:str, min_len:int, max_len:int, verbose=False):
+def get_data(good_file: str, noise_file: str, min_len: int, max_len: int, verbose=False):
 	"""Get training data (user files, nltk, and random)."""
 
 	good_data = []
@@ -991,7 +991,7 @@ def get_data(good_file:str, noise_file:str, min_len:int, max_len:int, verbose=Fa
 
 
 # =================================================================================================
-def split_data(data:list[str], val_pct:float):
+def split_data(data: list[str], val_pct: float):
 
 	size = int(len(data) * val_pct)
 	train = data[size:]
