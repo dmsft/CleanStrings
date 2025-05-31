@@ -19,7 +19,6 @@ import nltk
 import altair as alt
 import pandas as pd
 import numpy as np
-import win32api, win32process, win32con
 
 # pretty output and progress bars
 from rich import print as rPrint
@@ -42,18 +41,6 @@ def CountLines(fname=""):
 
 	with open(fname, "r") as f:
 		return sum(1 for _ in f)
-
-
-# =============================================================================================
-def LowerPriority():
-	"""Set the priority class of this process (normal, above, or below)."""
-
-	# https://mhammond.github.io/pywin32/modules.html
-	prcl = win32process.BELOW_NORMAL_PRIORITY_CLASS
-	pid = win32api.GetCurrentProcessId()
-	handle = win32api.OpenProcess(win32con.PROCESS_ALL_ACCESS, True, pid)
-	win32process.SetPriorityClass(handle, prcl)
-	win32api.CloseHandle(handle)
 
 
 # =================================================================================================
@@ -235,7 +222,7 @@ class BaseModel(nn.Module):
 
 	# =================================================================================================
 	@staticmethod
-	def SaveLossGraph(losses:list[float]):
+	def SaveLossGraph(losses: list[float]):
 		"""Save the training loss graph as PNG image."""
 
 		df_loss = pd.DataFrame(enumerate(losses), columns=["batch", "loss"])
@@ -246,29 +233,18 @@ class BaseModel(nn.Module):
 
 	# =================================================================================================
 	@staticmethod
-	def CalcAccuracy(predictions:torch.Tensor, ground_truth:torch.Tensor, threshold=0.85):
+	def CalcAccuracy(predictions: torch.Tensor, ground_truth: torch.Tensor, threshold=0.85):
 		"""Returns 0-1 accuracy for the given set of predictions and ground truth."""
 
 		# print(f"Predictions: {predictions.shape} {predictions}")
 		# print(f"Ground Truth: {ground_truth}")
 
 		pred = predictions.squeeze()
-		# print(f"Pred: {pred}")
-
-		# must be 0.5 since round assumes 0.5 as the threshold
-		temp = pred - (threshold - 0.5)
-		# print(f"Temporary: {temp}")
-
+		temp = pred - (threshold - 0.5)  # round assumes 0.5 as the threshold
 		rounded_predictions = torch.round(temp)
-		# print(f"Rounded Predictions: {rounded_predictions}")
 
-		# rounded_predictions = torch.floor(predictions + (1 - threshold))
 		success = (rounded_predictions == ground_truth).float()  # convert bool to float for div
 		accuracy = success.sum() / len(success)
-
-		# print(f"Success: {success}")
-		# print(f"Accuracy: {accuracy} {accuracy.item()}")
-		# exit()
 
 		return accuracy.item()
 
@@ -589,6 +565,8 @@ class NaiveBayesClassifier():
 	# =============================================================================================
 	def Train(self, good_data=[], noise_data=[]):
 
+		start = time.time()
+
 		if self._verbose:
 			print(f"[b red]Labeling data ...", file=sys.stderr)
 
@@ -596,7 +574,6 @@ class NaiveBayesClassifier():
 		val_set = self.vectorize(good_data[1], noise_data[1], False)
 
 		if self._verbose:
-			start = time.time()
 			print(f"[b red]Training Naive Bayes classifier ...", file=sys.stderr)
 
 		self._classifier = nltk.NaiveBayesClassifier.train(train_set)
@@ -864,8 +841,6 @@ def classify_dispatch(queue:mp.Queue, file:str, min_len:int, max_len:int, thread
 # =================================================================================================
 def classify_worker(in_queue:mp.Queue, out_queue:mp.Queue, algo:str, model_file:str, verbose=False):
 	"""Worker process to classify lines."""
-
-	LowerPriority()
 
 	# load NB model
 	if algo in ["nb", "both"]:
