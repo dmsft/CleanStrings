@@ -559,29 +559,35 @@ class NaiveBayesClassifier():
 			pickle.dump(self._classifier, fd)
 
 		if self._verbose:
-			print(f"[b red]Model saved to {fname}.", file=sys.stderr)
+			rPrint(f"[b red]Model saved to {fname}.", file=sys.stderr)
 
 
 	# =============================================================================================
 	def Train(self, good_data=[], noise_data=[]):
+		#from nltk.classify import SklearnClassifier
+		#from sklearn.naive_bayes import MultinomialNB
 
 		start = time.time()
 
 		if self._verbose:
-			print(f"[b red]Labeling data ...", file=sys.stderr)
+			rPrint(f"[b red]Labeling data ...", file=sys.stderr)
 
 		train_set = self.vectorize(good_data[0], noise_data[0])
 		val_set = self.vectorize(good_data[1], noise_data[1], False)
 
 		if self._verbose:
-			print(f"[b red]Training Naive Bayes classifier ...", file=sys.stderr)
+			rPrint(f"[b red]Training Naive Bayes classifier ...", file=sys.stderr)
 
 		self._classifier = nltk.NaiveBayesClassifier.train(train_set)
-		print(f"Accuracy: {nltk.classify.accuracy(self._classifier, val_set):.2f}")
+		#self._classifier = SklearnClassifier(MultinomialNB())
+		#self._classifier.train(train_set)
+
+		rPrint(f"Accuracy: {nltk.classify.accuracy(self._classifier, val_set):.2f}")
 
 		if self._verbose:
-			self._classifier.show_most_informative_features()
-			print(f"[b red]Training took {time.time()-start:.2f} sec.", file=sys.stderr)
+			rPrint(f"[b red]Training took {time.time()-start:.2f} sec.", file=sys.stderr)
+			self.show_errors(good_data[1], noise_data[1])
+			self._classifier.show_most_informative_features(37)
 
 
 	# =============================================================================================
@@ -600,10 +606,42 @@ class NaiveBayesClassifier():
 
 
 	# =============================================================================================
+	def show_errors(self, good_data: list[str], noise_data: list[str]):
+
+		num_errors = 37
+
+		# check positive samples
+		errors = []
+		for line in good_data:
+			features = NaiveBayesClassifier.extract_features(line)
+			guess = self._classifier.classify(features)
+
+			if guess != GOOD_LABEL:
+				errors.append((GOOD_LABEL, guess, line))
+
+		# print the errors
+		for (label, guess, line) in sorted(errors)[:num_errors]:
+			rPrint(f"[red]{guess} - [green]{label} [blue]:\t{line}", file=sys.stderr)
+
+		# check negative samples
+		errors = []
+		for line in noise_data:
+			features = NaiveBayesClassifier.extract_features(line)
+			guess = self._classifier.classify(features)
+
+			if guess != NOISE_LABEL:
+				errors.append((NOISE_LABEL, guess, line))
+
+		# print the errors
+		for (label, guess, line) in sorted(errors)[:num_errors]:
+			rPrint(f"[red]{guess} - [green]{label} [blue]:\t{line}", file=sys.stderr)
+
+
+	# =============================================================================================
 	def load(self, fname: str):
 
 		if self._verbose:
-			print(f"[b red]Loading model from {fname} ...", file=sys.stderr)
+			rPrint(f"[b red]Loading model from {fname} ...", file=sys.stderr)
 
 		try:
 			with open(fname, "rb") as fd:
@@ -621,25 +659,34 @@ class NaiveBayesClassifier():
 		# remove punctuation, digits and whitespace
 		# table = {ch: " " for ch in string.punctuation + string.digits + string.whitespace}
 		# line = text.translate(str.maketrans(table))
-		vowels = set("aeiou")
 		ft = {}
 
 		tot_len = len(line)
 		ft["tot_len"] = tot_len
 
 		# count words and their average length
-		arr = line.split(" ")
-		a = len(arr)
-		b = sum(map(len, arr))
+		words = line.split(" ")
+		a = len(words)
+		b = sum(map(len, words))
 		ft["num_words"] = a
 		ft["avg_word_len"] = int(b / a)
 
-		ft["num_vowels"] = sum([1 for c in line if c in vowels])
+		ft["num_vowels"] = sum([1 for c in line.lower() if c in set("aeiou")])
 		ft["num_digits"] = sum([1 for c in line if c.isdigit()])
 		ft["num_spaces"] = sum([1 for c in line if c.isspace()])
 		ft["num_punct"] = sum([1 for c in line if c in string.punctuation])
 		ft["num_upper"] = sum([1 for c in line if c.isupper()])
 		ft["num_lower"] = sum([1 for c in line if c.islower()])
+		ft["num_titled"] = sum([1 for word in words if word.istitle()])
+
+		ft["ends_with_punct"] = int(line[-1] in string.punctuation)
+		ft["ends_with_digit"] = int(line[-1].isdigit())
+
+		ft["starts_with_upper"] = int(line[0].isupper())
+		ft["starts_with_digit"] = int(line[0].isdigit())
+		ft["starts_with_punct"] = int(line[0] in string.punctuation)
+		ft["starts_with_vowel"] = int(line[0].lower() in "aeiou")
+		ft["starts_with_space"] = int(line[0].isspace())
 
 		# sum and average of char values
 		a = sum([ord(c) for c in line])
@@ -647,13 +694,21 @@ class NaiveBayesClassifier():
 		ft["chr_avg"] = int(a / tot_len)
 
 		# english word frequency
-		# ft["freq"] = int(utils.CalcEnglishFreq(line))
+		ft["freq"] = int(utils.CalcEnglishFreq(line))
+
+		# calculate bigram frequency
+		freq = nltk.FreqDist(nltk.bigrams(line))
+		ft["bigrams_sum"] = sum(1 for v in freq.values() if v > 1)
+
+		# calculate trigram frequency
+		freq = nltk.FreqDist(nltk.trigrams(line))
+		ft["trigrams_sum"] = sum(1 for v in freq.values() if v > 1)
 
 		return ft
 
 
 	# ===============================================================================================
-	def vectorize(self, good_data, noise_data, shuffle=True):
+	def vectorize(self, good_data: list[str], noise_data: list[str], shuffle = True):
 		"""Convert text to feature vectors and apply labels.."""
 
 		start = time.time()
@@ -680,7 +735,7 @@ class NaiveBayesClassifier():
 		labeled_set  = nltk.classify.apply_features(NaiveBayesClassifier.extract_features, labeled_data, True)
 
 		if self._verbose:
-			print(f"[b red]Labeled {len(labeled_data):,} items in {time.time()-start:.2f} sec.", file=sys.stderr)
+			rPrint(f"[b red]Labeled {len(labeled_data):,} items in {time.time()-start:.2f} sec.", file=sys.stderr)
 
 		return labeled_set
 
