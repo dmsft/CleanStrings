@@ -694,7 +694,7 @@ class NaiveBayesClassifier():
 		ft["chr_avg"] = int(a / tot_len)
 
 		# english word frequency
-		ft["freq"] = int(utils.CalcEnglishFreq(line))
+		# ft["freq"] = int(utils.CalcEnglishFreq(line))
 
 		# calculate bigram frequency
 		freq = nltk.FreqDist(nltk.bigrams(line))
